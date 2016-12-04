@@ -122,23 +122,37 @@ get_config(App) ->
 get_tags() ->
 	application:get_env(?APP, tags, []).
 
+%% Thanks to Michael Truog, from whom this technique was lifted
+%% (with my modifications. Since this is not being used for true cryptographic
+%% purposes, but only for event IDs, substituting rand_bytes for
+%% strong_rand_bytes should not be a big deal. If it is, this can easily
+%% be changed.
 event_id_i() ->
-	U0 = crypto:rand_uniform(0, (2 bsl 32) - 1),
-	U1 = crypto:rand_uniform(0, (2 bsl 16) - 1),
-	U2 = crypto:rand_uniform(0, (2 bsl 12) - 1),
-	U3 = crypto:rand_uniform(0, (2 bsl 32) - 1),
-	U4 = crypto:rand_uniform(0, (2 bsl 30) - 1),
-	<<UUID:128>> = <<U0:32, U1:16, 4:4, U2:12, 2#10:2, U3:32, U4:30>>,
-	iolist_to_binary(io_lib:format("~32.16.0b", [UUID])).
+    <<Rand1:48, _:4, Rand2:12, _:2, Rand3:62>> = crypto:rand_bytes(16),
+    binary_to_hex_binary(<<Rand1:48,
+                           0:1, 1:1, 0:1, 0:1,  % version 4 bits
+                           Rand2:12,
+                           1:1, 0:1,            % RFC 4122 variant bits
+                           Rand3:62>>).
 
 timestamp_i() ->
-	{{Y,Mo,D}, {H,Mn,S}} = calendar:now_to_datetime(os:timestamp()),
-	FmtStr = "~4.10.0B-~2.10.0B-~2.10.0BT~2.10.0B:~2.10.0B:~2.10.0B",
-	iolist_to_binary(io_lib:format(FmtStr, [Y, Mo, D, H, Mn, S])).
+	{{Y,Mo,D}, {H,M,S}} = calendar:now_to_universal_time(erlang:timestamp()),
+    YH = Y div 100, YL = Y rem 100,
+    <<(i2d_h(YH)),(i2d_l(YH)),(i2d_h(YL)),(i2d_l(YL)),
+      $-,(i2d_h(Mo)),(i2d_l(Mo)),
+      $-,(i2d_h(D)),(i2d_l(D)),
+      $T,(i2d_h(H)),(i2d_l(H)),
+      $:,(i2d_h(M)),(i2d_l(M)),
+      $:,(i2d_h(S)),(i2d_l(S))>>.
 
+-ifdef(new_time).
+unix_timestamp_i() ->
+    erlang:system_time(seconds).
+-else.
 unix_timestamp_i() ->
 	{Mega, Sec, Micro} = os:timestamp(),
 	Mega * 1000000 * 1000000 + Sec * 1000000 + Micro.
+-endif.
 
 frame_to_json_i({Module, Function, Arguments}) ->
 	frame_to_json_i({Module, Function, Arguments, []});
@@ -170,3 +184,47 @@ term_to_json_i(Term) when is_binary(Term); is_atom(Term) ->
 	Term;
 term_to_json_i(Term) ->
 	iolist_to_binary(io_lib:format("~120p", [Term])).
+
+binary_to_hex_binary(<<B/binary>>) when bit_size(B) band 2#11 =:= 0 ->
+    list_to_binary([int_to_hex(I) || <<I:4>> <= B]).
+
+i2d_h(N) -> int_to_dec(N div 10).
+i2d_l(N) -> int_to_dec(N rem 10).
+
+int_to_hex(0)  -> $0;
+int_to_hex(1)  -> $1;
+int_to_hex(2)  -> $2;
+int_to_hex(3)  -> $3;
+int_to_hex(4)  -> $4;
+int_to_hex(5)  -> $5;
+int_to_hex(6)  -> $6;
+int_to_hex(7)  -> $7;
+int_to_hex(8)  -> $8;
+int_to_hex(9)  -> $9;
+int_to_hex(10) -> $a;
+int_to_hex(11) -> $b;
+int_to_hex(12) -> $c;
+int_to_hex(13) -> $d;
+int_to_hex(14) -> $e;
+int_to_hex(15) -> $f.
+
+int_to_dec(0)  -> $0;
+int_to_dec(1)  -> $1;
+int_to_dec(2)  -> $2;
+int_to_dec(3)  -> $3;
+int_to_dec(4)  -> $4;
+int_to_dec(5)  -> $5;
+int_to_dec(6)  -> $6;
+int_to_dec(7)  -> $7;
+int_to_dec(8)  -> $8;
+int_to_dec(9)  -> $9.
+
+-compile({inline,
+          [
+           {int_to_hex,1},
+           {int_to_dec,1},
+           {binary_to_hex_binary,1},
+           {i2d_h,1},
+           {i2d_l,1}
+          ]}).
+
